@@ -2,6 +2,7 @@ local utils = require("modules/utils/utils")
 local settings = require("modules/utils/settings")
 local style = require("modules/ui/style")
 local editor = require("modules/utils/editor/editor")
+local prefabPreview = require("modules/utils/prefabPreview")
 
 ---@class favorite
 ---@field name string
@@ -10,48 +11,21 @@ local editor = require("modules/utils/editor/editor")
 ---@field category category?
 ---@field icon string
 ---@field assetCount number?
----@field favoritesUI favoritesUI
+---@field prefabsUI prefabsUI
 ---@field spawnUI spawnUI
 local favorite = {}
 local iconResolveCache = {}
 local SPAWNABLE_ELEMENT_MODULE_PATH = "modules/classes/editor/spawnableElement"
 local POSITIONABLE_GROUP_MODULE_PATH = "modules/classes/editor/positionableGroup"
-local RANDOMIZED_GROUP_MODULE_PATH = "modules/classes/editor/randomizedGroup"
-
----@param data table?
----@return boolean
-local function isSerializedSpawnable(data)
-    return type(data) == "table"
-        and (data.modulePath == SPAWNABLE_ELEMENT_MODULE_PATH
-            or data.type == "object"
-            or data.type == "element"
-            or data.spawnable ~= nil)
-end
-
----@param data table?
----@return boolean
-local function isSerializedGroup(data)
-    if type(data) ~= "table" then
-        return false
-    end
-
-    if data.modulePath == POSITIONABLE_GROUP_MODULE_PATH
-        or data.modulePath == RANDOMIZED_GROUP_MODULE_PATH
-        or data.type == "group" then
-        return true
-    end
-
-    return data.childs ~= nil and not isSerializedSpawnable(data)
-end
 
 ---@param data table?
 ---@return number?
 local function getSerializedAssetCount(data)
-    if isSerializedSpawnable(data) then
+    if utils.isSerializedSpawnable(data) then
         return 1
     end
 
-    if not isSerializedGroup(data) then
+    if not utils.isSerializedGroup(data) then
         return nil
     end
 
@@ -67,9 +41,9 @@ local function getSerializedAssetCount(data)
         local current = table.remove(stack)
 
         for _, child in pairs(current.childs or {}) do
-            if isSerializedSpawnable(child) then
+            if utils.isSerializedSpawnable(child) then
                 count = count + 1
-            elseif isSerializedGroup(child) then
+            elseif utils.isSerializedGroup(child) then
                 local childCount = tonumber(child.elementCount)
                 if childCount then
                     count = count + math.max(0, math.floor(childCount))
@@ -166,7 +140,7 @@ local function resolveIconKeyFromModulePath(data)
     return ""
 end
 
----@param fUI favoritesUI
+---@param fUI prefabsUI
 ---@return favorite
 function favorite:new(fUI)
 	local o = {}
@@ -178,7 +152,7 @@ function favorite:new(fUI)
     o.icon = ""
     o.assetCount = nil
 
-    o.favoritesUI = fUI
+    o.prefabsUI = fUI
     o.spawnUI = fUI.spawnUI
 
 	self.__index = self
@@ -259,9 +233,8 @@ function favorite:drawSideButtons(assetCount)
     if countText then
         totalX = totalX + countX + countCogSpacing
     end
-    local scrollBarAddition = ImGui.GetScrollMaxY() > 0 and ImGui.GetStyle().ScrollbarSize or 0
-    local cursorX = ImGui.GetWindowWidth() - totalX - ImGui.GetStyle().CellPadding.x / 2 - scrollBarAddition + ImGui.GetScrollX()
-    ImGui.SetCursorPosX(cursorX)
+    style.setCursorRightAligned(totalX)
+    local cursorX = ImGui.GetCursorPosX()
 
     if countText then
         ImGui.SetNextItemAllowOverlap()
@@ -275,14 +248,14 @@ function favorite:drawSideButtons(assetCount)
     ImGui.SetCursorPosY(ImGui.GetCursorPosY() + 1 * style.viewSize)
 	ImGui.SetNextItemAllowOverlap()
 	if ImGui.Button(IconGlyphs.CogOutline) then
-		self.favoritesUI.openPopup = true
-        self.favoritesUI.popupItem = self
-        self.favoritesUI.popupItemConflict = self:checkIsDuplicate()
+		self.prefabsUI.openPopup = true
+        self.prefabsUI.popupItem = self
+        self.prefabsUI.popupItemConflict = self:checkIsDuplicate()
 	end
 end
 
 function favorite:draw(context)
-    self.favoritesUI.pushRow(context)
+    self.prefabsUI.pushRow(context)
 
 	ImGui.PushID(context.row)
 
@@ -291,20 +264,10 @@ function favorite:draw(context)
 
     if ImGui.Selectable("##favorite" .. context.row, false, ImGuiSelectableFlags.SpanAllColumns + ImGuiSelectableFlags.AllowOverlap) then
         self.spawnUI.spawnNew({ data = self.data }, require(self.data.modulePath), true)
-    elseif ImGui.IsMouseDragging(0, style.draggingThreshold) and not self.spawnUI.dragging and ImGui.IsItemHovered() then
-        self.spawnUI.dragging = true
-        self.spawnUI.dragData = { data = self.data, name = self.name }
-    elseif not ImGui.IsMouseDragging(0, style.draggingThreshold) and self.spawnUI.dragging then
-        if not ImGui.IsItemHovered() then
-            local ray = editor.getScreenToWorldRay()
-            self.spawnUI.popupSpawnHit = editor.getRaySceneIntersection(ray, GetPlayer():GetFPPCameraComponent():GetLocalToWorld():GetTranslation(), nil, true)
-
-            spawnUI.dragData.lastSpawned = spawnUI.spawnNew(self.spawnUI.dragData, require(self.data.modulePath), true)
-        end
-
-        self.spawnUI.dragging = false
-        self.spawnUI.dragData = nil
-        self.spawnUI.popupSpawnHit = nil
+    else
+        self.spawnUI.handleRowDrag({ data = self.data, name = self.name }, function (dragged)
+            dragged.lastSpawned = self.spawnUI.spawnNew(dragged, require(self.data.modulePath), true)
+        end)
     end
 
     if ImGui.BeginPopupContextItem("##favoriteContext", ImGuiPopupFlags.MouseButtonRight) then
@@ -312,13 +275,29 @@ function favorite:draw(context)
             self.spawnUI.spawnNew({ data = self.data }, require(self.data.modulePath), true, { loadHidden = true })
         end
 
+        ImGui.Separator()
+
+        -- Nested confirm so a single misclick can't delete a prefab (removal is not undoable).
+        if ImGui.BeginMenu(IconGlyphs.DeleteOutline .. " Delete") then
+            if ImGui.MenuItem("Confirm delete") then
+                if self.category then
+                    self.category:removeFavorite(self)
+                end
+            end
+            ImGui.EndMenu()
+        end
+
         ImGui.EndPopup()
     end
 
     -- Asset preview
-    if self.data.modulePath == SPAWNABLE_ELEMENT_MODULE_PATH and ImGui.IsItemHovered() and settings.assetPreviewEnabled[self.data.spawnable.modulePath] then
+    local isSingleAsset = self.data.modulePath == SPAWNABLE_ELEMENT_MODULE_PATH
+    local previewEnabled = settings.prefabsAssetPreviewEnabled ~= false
+    if previewEnabled and isSingleAsset and ImGui.IsItemHovered() and settings.assetPreviewEnabled[self.data.spawnable.modulePath] then
         self.spawnUI.handleAssetPreviewHovered(self, true)
-    elseif self.spawnUI.hoveredEntry == self and (self.spawnUI.previewInstance or self.spawnUI.previewTimer) then
+    elseif previewEnabled and not isSingleAsset and ImGui.IsItemHovered() and prefabPreview.isPreviewable(self.data, self:getAssetCount()) then
+        self.spawnUI.handlePrefabPreviewHovered(self)
+    elseif self.spawnUI.hoveredEntry == self and (self.spawnUI.previewInstance or self.spawnUI.previewTimer or prefabPreview.isActive()) then
         self.spawnUI.hoveredEntry = nil
         self.spawnUI.stopActiveAssetPreview()
     end
@@ -326,11 +305,7 @@ function favorite:draw(context)
 	context.row = context.row + 1
 
 	ImGui.SameLine()
-	ImGui.PushStyleColor(ImGuiCol.Button, 0)
-	ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 1, 1, 1, 0.2)
-	ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, 0, 0)
-	ImGui.PushStyleVar(ImGuiStyleVar.ButtonTextAlign, 0.5, 0.5)
-	ImGui.SetCursorPosY(ImGui.GetCursorPosY() + 1 * style.viewSize)
+	style.pushListRowContent()
 
 	ImGui.SetNextItemAllowOverlap()
 	if self.icon ~= "" then
@@ -347,8 +322,7 @@ function favorite:draw(context)
 	ImGui.SameLine()
 	self:drawSideButtons(self:getAssetCount())
 
-	ImGui.PopStyleColor(2)
-	ImGui.PopStyleVar(3)
+	style.popListRowContent(1)
 
 	ImGui.PopID()
 end

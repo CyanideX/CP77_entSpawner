@@ -9,6 +9,7 @@ local colorUtil = require("modules/utils/color")
 local lcHelper = require("modules/utils/lightChannelHelper")
 local lightPreview = require("modules/utils/previewUtils")
 local targeting = require("modules/utils/editor/targeting")
+local iesProfiles = require("modules/utils/iesProfiles")
 local Cron = require("modules/utils/Cron")
 
 local LIGHT_TYPE_POINT = 0
@@ -86,6 +87,8 @@ local PREVIEW_SIZE_CONFIG = {
 ---@field private pathTracingLightUsage integer
 ---@field private pathTracingOverrideScaleGI boolean
 ---@field private rtxdiShadowStartingDistance number
+---@field private iesProfile string
+---@field private iesProfileSearch string
 ---@field private rayTracedShadowsPlatforms table
 ---@field private pathTracingLightUsageTypes table
 ---@field private maxRayPathTracingPropertiesWidth number
@@ -107,6 +110,26 @@ function light:new()
     o.node = "worldStaticLightNode"
     o.description = "Places a static light"
     o.icon = IconGlyphs.LightbulbOn20
+
+    -- Disabled while a Spawn New asset preview runs, so already placed lights and their
+    -- visualizers do not contaminate the previewed asset. `light` itself is only
+    -- suppressed for camera-following lights (see spawnUI.setAssetPreviewActive).
+    o.previewSuppressedComponents = {
+        light = "light",
+        visualizers = {
+            "box",
+            "sphere",
+            "cone",
+            "cone_inner",
+            "capsule_body",
+            "capsule_top",
+            "capsule_bottom",
+            "mesh",
+            "mesh_inner",
+            "radius_sphere",
+            "arrows"
+        }
+    }
 
     o.color = { 1, 1, 1 }
     o.intensity = 100
@@ -156,6 +179,8 @@ function light:new()
     o.pathTracingLightUsage = 0
     o.pathTracingOverrideScaleGI = false
     o.rtxdiShadowStartingDistance = 0
+    o.iesProfile = ""
+    o.iesProfileSearch = ""
     o.rayTracedShadowsPlatforms = utils.enumTable("rendRayTracedShadowsPlatform")
     o.pathTracingLightUsageTypes = utils.enumTable("rendEPathTracingLightUsage")
 
@@ -483,30 +508,6 @@ local function normalizeAngleDeg(angle)
     return value
 end
 
----@param rotationLike any
----@return EulerAngles?
-local function toEulerAnglesSafe(rotationLike)
-    if not rotationLike then
-        return nil
-    end
-
-    if rotationLike.roll ~= nil and rotationLike.pitch ~= nil and rotationLike.yaw ~= nil then
-        return EulerAngles.new(rotationLike.roll, rotationLike.pitch, rotationLike.yaw)
-    end
-
-    local okEuler, euler = pcall(function ()
-        if type(rotationLike.ToEulerAngles) == "function" then
-            return rotationLike:ToEulerAngles()
-        end
-        return nil
-    end)
-    if okEuler and euler then
-        return euler
-    end
-
-    return nil
-end
-
 ---@param entity entEntity?
 function light:updateArrowVisibilityForCameraFollow(entity)
     local target = entity or self:getEntity()
@@ -525,6 +526,9 @@ function light:updateArrowVisibilityForCameraFollow(entity)
     end
 
     visualizer.showArrows(target, showArrows)
+    if showArrows then
+        visualizer.setArrowScale(target, self:getScaledArrowSize())
+    end
 end
 
 function light:teleportPlayerToLightCameraAligned()
@@ -555,8 +559,8 @@ function light:teleportPlayerToLightCameraAligned()
     if camera then
         local cameraTransform = camera:GetLocalToWorld()
         if cameraTransform then
-            local cameraEuler = toEulerAnglesSafe(cameraTransform:GetRotation())
-            local playerEuler = toEulerAnglesSafe(player:GetWorldOrientation())
+            local cameraEuler = gameUtils.toEulerAnglesSafe(cameraTransform:GetRotation())
+            local playerEuler = gameUtils.toEulerAnglesSafe(player:GetWorldOrientation())
             if cameraEuler and playerEuler then
                 cameraPitchOffset = normalizeAngleDeg(cameraEuler.pitch - playerEuler.pitch)
                 cameraYawOffset = normalizeAngleDeg(cameraEuler.yaw - playerEuler.yaw)
@@ -596,7 +600,7 @@ function light:getCameraFollowTransform()
     local targetPosition = utils.addVector(cameraPosition, cameraForward)
     local targetRotation = targeting.getLookAtRotation(self.rotation, cameraPosition, targetPosition)
     if not targetRotation and cameraRotation then
-        targetRotation = toEulerAnglesSafe(cameraRotation)
+        targetRotation = gameUtils.toEulerAnglesSafe(cameraRotation)
     end
 
     return cameraPosition, targetRotation
@@ -773,6 +777,9 @@ function light:onAssemble(entity)
     component.pathTracingLightUsage = Enum.new("rendEPathTracingLightUsage", self.pathTracingLightUsage)
     component.pathTracingOverrideScaleGI = self.pathTracingOverrideScaleGI
     component.rtxdiShadowStartingDistance = self.rtxdiShadowStartingDistance
+    if self.iesProfile and self.iesProfile ~= "" then
+        component.iesProfile = ResRef.FromString(self.iesProfile)
+    end
 
     entity:AddComponent(component)
     self:updateArrowVisibilityForCameraFollow(entity)
@@ -830,6 +837,7 @@ function light:save()
     data.pathTracingLightUsage = self.pathTracingLightUsage
     data.pathTracingOverrideScaleGI = self.pathTracingOverrideScaleGI
     data.rtxdiShadowStartingDistance = self.rtxdiShadowStartingDistance
+    data.iesProfile = self.iesProfile
     data.lightChannels = utils.deepcopy(self.lightChannels)
     data.radiusPreviewed = self.radiusPreviewed
     data.cameraFollowEnabled = self.cameraFollowEnabled
@@ -1092,9 +1100,62 @@ function light:draw()
         style.tooltip("Softens the transition between both angles")
         self:updateFull(finished)
     end
-    
+
     ImGui.Dummy(0, 4 * style.viewSize)
-    
+
+    style.mutedText("IES Profile")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxBasePropertiesWidth)
+    local iesProfileList = iesProfiles.getSelectable()
+    local iesProfilePrevious = self.iesProfile
+    local iesProfileChanged
+    self.iesProfile, self.iesProfileSearch, iesProfileChanged = style.trackedSearchDropdown(
+        "##iesProfile",
+        "Search IES profile...",
+        self.iesProfile,
+        self.iesProfileSearch,
+        iesProfileList,
+        {
+            element = self.object,
+            width = 200,
+            matchContentWidth = true,
+            optionDisplayFn = function(optionText)
+                return iesProfiles.displayName(optionText)
+            end,
+            tooltip = "IES light projection profile applied to this light"
+        }
+    )
+    if iesProfileChanged and self.iesProfile ~= iesProfilePrevious then
+        self:updateFull(true)
+    end
+
+    ImGui.SameLine()
+    ImGui.BeginDisabled(#iesProfiles.get() == 0)
+    style.pushButtonNoBG(true)
+    if ImGui.Button(IconGlyphs.SkipNext .. "##cycleIESProfile") then
+        local nextProfile, cycled = iesProfiles.getNext(self.iesProfile)
+        if cycled then
+            if self.object then
+                history.addAction(history.getElementChange(self.object))
+            end
+            self.iesProfile = nextProfile
+            self:updateFull(true)
+        end
+    end
+    style.pushButtonNoBG(false)
+    ImGui.EndDisabled()
+    style.tooltip("Select the next IES profile. Wraps around, including 'None'.")
+
+    ImGui.SameLine()
+    style.pushButtonNoBG(true)
+    if ImGui.Button(IconGlyphs.Reload .. "##reloadIESProfiles") then
+        iesProfiles.reload()
+    end
+    style.pushButtonNoBG(false)
+    style.tooltip("Reload the IES profile list from disk.")
+
+    ImGui.Dummy(0, 4 * style.viewSize)
+
     local rotationTargetingDisabled = self.object == nil or self.object:isLocked() or self.object.rotationLocked
     local targetingDisabledByCameraFollow = self.cameraFollowEnabled == true
 
@@ -1532,16 +1593,7 @@ function light:draw()
 end
 
 function light:getProperties()
-    local properties = visualized.getProperties(self)
-    table.insert(properties, {
-        id = self.node,
-        name = self.dataType,
-        defaultHeader = true,
-        draw = function()
-            self:draw()
-        end
-    })
-    return properties
+    return self:addNodeProperty(visualized.getProperties(self))
 end
 
 function light:getGroupedProperties()
@@ -1619,6 +1671,10 @@ function light:export()
         pathTracingOverrideScaleGI = self.pathTracingOverrideScaleGI and 1 or 0,
         rtxdiShadowStartingDistance = self.rtxdiShadowStartingDistance
     }
+
+    if self.iesProfile and self.iesProfile ~= "" then
+        data.data.iesProfile = iesProfiles.exportRef(self.iesProfile)
+    end
 
     return data
 end
