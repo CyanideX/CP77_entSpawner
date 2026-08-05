@@ -10,6 +10,7 @@ local colliderBase = require("modules/classes/spawn/collision/colliderBase")
 local previewControls = require("modules/utils/previewControls")
 local keys = require("modules/utils/keys")
 local input = require("modules/utils/input")
+local tutorialAdapter = require("modules/utils/tutorialAdapter")
 
 local colliderColors = { "Red", "Green", "Blue" }
 local streamingPresetLabels = { "Interior", "Street", "District", "Landscape", "To the Moon" }
@@ -967,6 +968,58 @@ function settingsUI.draw(spawner)
 
         ImGui.Dummy(0, 4 * style.viewSize)
         ImGui.TreePop()
+    end
+
+    if tutorialAdapter.isAvailable() then
+        if ImGui.TreeNodeEx("Tutorials", ImGuiTreeNodeFlags.SpanFullWidth) then
+            ImGui.Dummy(0, 4 * style.viewSize)
+
+            local tutorialsEnabled = tutorialAdapter.isGroupEnabled()
+            local enabledChanged
+            tutorialsEnabled, enabledChanged = ImGui.Checkbox("Enable tutorials", tutorialsEnabled)
+            if enabledChanged then
+                tutorialAdapter.setGroupEnabled(tutorialsEnabled)
+            end
+            style.tooltip("Toggle guided tutorials for World Builder")
+
+            ImGui.Dummy(0, 8 * style.viewSize)
+            style.sectionHeaderStart("Available Tutorials")
+
+            style.pushGreyedOut(not tutorialsEnabled)
+            if ImGui.Button("Getting Started") then
+                tutorialAdapter.start("getting-started")
+            end
+            style.popGreyedOut(not tutorialsEnabled)
+            ImGui.SameLine()
+            if tutorialAdapter.isCompleted("getting-started") then
+                style.styledText("(Completed)", style.successColor)
+            else
+                style.mutedText("(Not started)")
+            end
+
+            style.pushGreyedOut(not tutorialsEnabled)
+            if ImGui.Button("Spawn New Tab") then
+                tutorialAdapter.start("spawn-new-intro")
+            end
+            style.popGreyedOut(not tutorialsEnabled)
+            ImGui.SameLine()
+            if tutorialAdapter.isCompleted("spawn-new-intro") then
+                style.styledText("(Completed)", style.successColor)
+            else
+                style.mutedText("(Auto-triggers on first visit)")
+            end
+
+            ImGui.Dummy(0, 4 * style.viewSize)
+            if ImGui.Button("Reset all tutorial progress") then
+                tutorialAdapter.resetCompletion("getting-started")
+                tutorialAdapter.resetCompletion("spawn-new-intro")
+            end
+            style.tooltip("Clear completion state so tutorials can be run again")
+            style.sectionHeaderEnd()
+
+            ImGui.Dummy(0, 4 * style.viewSize)
+            ImGui.TreePop()
+        end
     end
 
     ImGui.PopItemWidth()

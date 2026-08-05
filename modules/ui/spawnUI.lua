@@ -13,6 +13,7 @@ local logger = require("modules/utils/logger")
 local prefabPreview = require("modules/utils/prefabPreview")
 local previewControls = require("modules/utils/previewControls")
 local assetFavorites = require("modules/utils/assetFavorites")
+local tutorialAdapter = require("modules/utils/tutorialAdapter")
 
 local types = {
     ["Entity"] = {
@@ -2126,6 +2127,7 @@ function spawnUI.drawTargetGroupSelector()
     ImGui.SameLine()
 	ImGui.PushItemWidth(200 * style.viewSize)
 	spawnUI.selectedGroup = ImGui.Combo("##newSpawnGroup", spawnUI.selectedGroup, groups, #groups)
+    tutorialAdapter.report("entSpawner:spawnNew:targetGroup")
     style.comboValueTooltip(spawnUI.selectedGroup, groups, "Automatically place any newly spawned object into the selected group.\nPress CTRL-N in \"Spawned\" tab to set this selector to the currently selected group.")
     ImGui.EndGroup()
 	ImGui.PopItemWidth()
@@ -2152,6 +2154,7 @@ function spawnUI.drawAll()
     ImGui.PushItemWidth(120 * style.viewSize)
 	local typeChanged
 	spawnUI.selectedType, typeChanged = ImGui.Combo("Object type", spawnUI.selectedType, typeNames, #typeNames)
+    tutorialAdapter.report("entSpawner:spawnNew:typeCombo")
     style.comboValueTooltip(spawnUI.selectedType, typeNames)
     if typeChanged then
         spawnUI.updateCategory()
@@ -2161,6 +2164,7 @@ function spawnUI.drawAll()
 
 	local variantChanged
 	spawnUI.selectedVariant, variantChanged = ImGui.Combo("Object variant", spawnUI.selectedVariant, variantNames, #variantNames)
+    tutorialAdapter.report("entSpawner:spawnNew:variantCombo")
     if variantChanged then
         spawnUI.updateVariant()
     end
@@ -2188,6 +2192,7 @@ function spawnUI.drawAll()
 
     local filterChanged, filterCleared
     spawnUI.filter, filterChanged, filterCleared = style.drawSearchFilterRow("##Filter", spawnUI.filter, { maxLength = 500 })
+    tutorialAdapter.report("entSpawner:spawnNew:searchFilter")
     if filterChanged or filterCleared then
         saveSpawnUIFilterIfChanged()
         spawnUI.updateFilter()

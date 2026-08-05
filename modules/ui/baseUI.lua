@@ -13,6 +13,7 @@ local groupAMMImportManager = require("modules/utils/pipeline/groupAMMImportMana
 local history = require("modules/utils/history")
 
 local wu
+local tutorialAdapter = require("modules/utils/tutorialAdapter")
 
 ---@class baseUI
 baseUI = {
@@ -269,6 +270,9 @@ function baseUI.init()
     local windowUtils = GetMod("WindowUtils")
     wu = windowUtils or ImGui
 
+    tutorialAdapter.init()
+    baseUI.registerTutorials()
+
     if baseUI.previewTimeline and baseUI.previewTimeline.bindSpawnedUI then
         baseUI.previewTimeline.bindSpawnedUI(baseUI.spawnedUI)
     end
@@ -399,15 +403,20 @@ function baseUI.draw(spawner)
                     end
 
                     if ImGui.BeginTabItem(tabLabel, tabItemFlags) then
+                        tutorialAdapter.report("entSpawner:tab:" .. tab.id)
                         style.tooltipActionLabel(tabHiddenText)
                         if baseUI.activeTab ~= key then
                             baseUI.activeTab = key
                             baseUI.loadTabSize = true
+                            if tab.id == "spawn" and not tutorialAdapter.isCompleted("spawn-new-intro") then
+                                tutorialAdapter.start("spawn-new-intro")
+                            end
                         end
                         ImGui.Spacing()
                         tab.draw(spawner)
                         ImGui.EndTabItem()
                     else
+                        tutorialAdapter.report("entSpawner:tab:" .. tab.id)
                         style.tooltipActionLabel(tabHiddenText)
                     end
                 else
@@ -471,6 +480,68 @@ function baseUI.draw(spawner)
 
     input.context.viewport.hovered = not input.context.main.hovered
     input.context.viewport.focused = not input.context.main.focused
+end
+
+function baseUI.registerTutorials()
+    if not tutorialAdapter.isAvailable() then return end
+
+    tutorialAdapter.register({
+        id = "getting-started",
+        title = "Getting Started",
+        trigger = { type = "manual" },
+        window = "World Builder",
+        steps = {
+            {
+                target = "entSpawner:tab:spawn",
+                text = "This is the Spawn New tab. Browse and spawn entities, meshes, lights, and more."
+            },
+            {
+                target = "entSpawner:tab:spawned",
+                text = "The Spawned tab shows everything you've placed in the world. Select, edit, and organize objects here."
+            },
+            {
+                target = "entSpawner:tab:saved",
+                text = "Projects tab lets you save and load groups of objects. Great for building reusable setups."
+            },
+            {
+                target = "entSpawner:tab:settings",
+                text = "Settings tab has all your preferences. Customize spawn behavior, keybinds, and visual options."
+            }
+        }
+    })
+
+    tutorialAdapter.register({
+        id = "spawn-new-intro",
+        title = "Spawn New Tab",
+        trigger = { type = "manual" },
+        window = "World Builder",
+        steps = {
+            {
+                target = "entSpawner:spawnNew:targetGroup",
+                text = "Target Group controls where new objects are placed. Set it to Root or pick a group from the Spawned tab."
+            },
+            {
+                target = "entSpawner:spawnNew:typeCombo",
+                text = "Object Type filters what kind of thing you want to spawn: entities, meshes, lights, effects, and more."
+            },
+            {
+                target = "entSpawner:spawnNew:variantCombo",
+                text = "Object Variant narrows it down further. Each type has specialized variants with different properties."
+            },
+            {
+                target = "entSpawner:spawnNew:searchFilter",
+                text = "Use the search filter to find specific assets. Type part of a name or path to filter the list below."
+            }
+        }
+    })
+end
+
+function baseUI.startTutorial(tutorialId)
+    tutorialAdapter.start(tutorialId)
+end
+
+function baseUI.getTutorialAdapter()
+    return tutorialAdapter
 end
 
 return baseUI
